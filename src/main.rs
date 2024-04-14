@@ -64,17 +64,8 @@ fn init_command() -> anyhow::Result<()> {
 }
 
 fn cat_file_command(object: String, flags: CatFlags) -> anyhow::Result<()> {
-    let len = object.len();
-    if (len < 4) || (len > 40) {
-        bail!("Invalid object name {object}");
-    }
-
     let file_path = find_object_file(object)?;
-
-    let file = File::open(&file_path).context(format!("Failed to open file at {file_path}"))?;
-    let file_reader = BufReader::new(file);
-    let decoder = ZlibDecoder::new(file_reader);
-    let mut reader = BufReader::new(decoder);
+    let mut reader = get_compressed_file_reader(&file_path)?;
 
     let object_type = read_object_type(&mut reader, &file_path)?;
     if flags.print_type {
@@ -89,7 +80,7 @@ fn cat_file_command(object: String, flags: CatFlags) -> anyhow::Result<()> {
     }
 
     if flags.print_content {
-        let mut writer = BufWriter::new(stdout());
+        let mut writer = BufWriter::new(stdout().lock());
         io::copy(&mut reader, &mut writer).context(format!("Failed to output contents from {file_path}"))?;
         return Ok(());
     }
@@ -98,6 +89,10 @@ fn cat_file_command(object: String, flags: CatFlags) -> anyhow::Result<()> {
 }
 
 fn find_object_file(object: String) -> anyhow::Result<String> {
+    let len = object.len();
+    if (len < 4) || (len > 40) {
+        bail!("Invalid object name {object}");
+    }
     let (dir, file_search) = object.split_at(2);
     let dir_path = format!("{OBJECTS_PATH}/{dir}/");
 
@@ -125,9 +120,17 @@ fn find_object_file(object: String) -> anyhow::Result<String> {
     Ok(file_path)
 }
 
+fn get_compressed_file_reader(file_path: &String) -> anyhow::Result<impl BufRead> {
+    let file = File::open(&file_path).context(format!("Failed to open file at {file_path}"))?;
+    let file_reader = BufReader::new(file);
+    let decoder = ZlibDecoder::new(file_reader);
+    let reader = BufReader::new(decoder);
+    Ok(reader)
+}
+
 fn read_object_type(reader: &mut impl BufRead, file_path: &String) -> anyhow::Result<String> {
     let mut buf = vec![];
-    let _ = reader.by_ref().take(10).read_until(' ' as u8, &mut buf).context(format!("Failed to extract type from {file_path}"))?;
+    let _ = reader.take(10).read_until(' ' as u8, &mut buf).context(format!("Failed to extract type from {file_path}"))?;
 
     let object_type = buf[..buf.len() - 1]
         .into_iter()
@@ -142,7 +145,7 @@ fn read_object_type(reader: &mut impl BufRead, file_path: &String) -> anyhow::Re
 
 fn read_object_size(reader: &mut impl BufRead, file_path: &String) -> anyhow::Result<u64> {
     let mut buf = vec![];
-    let _ = reader.by_ref().take(20).read_until(0, &mut buf).context(format!("Failed to extract size from {file_path}"))?;
+    let _ = reader.take(20).read_until(0, &mut buf).context(format!("Failed to extract size from {file_path}"))?;
 
     let size_str = buf[..buf.len() - 1]
         .iter()
