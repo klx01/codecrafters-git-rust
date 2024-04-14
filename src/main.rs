@@ -4,7 +4,7 @@ use std::io::{BufReader, BufWriter, stdout};
 use anyhow::{bail, Context};
 use clap::{Args, Parser, Subcommand};
 use std::io::prelude::*;
-use flate2::bufread::ZlibDecoder;
+use flate2::read::ZlibDecoder;
 
 /// a subset of git, implemented as a learning challenge
 #[derive(Parser)]
@@ -122,8 +122,7 @@ fn find_object_file(object: String) -> anyhow::Result<String> {
 
 fn get_compressed_file_reader(file_path: &String) -> anyhow::Result<impl BufRead> {
     let file = File::open(&file_path).context(format!("Failed to open file at {file_path}"))?;
-    let file_reader = BufReader::new(file);
-    let decoder = ZlibDecoder::new(file_reader);
+    let decoder = ZlibDecoder::new(file);
     let reader = BufReader::new(decoder);
     Ok(reader)
 }
