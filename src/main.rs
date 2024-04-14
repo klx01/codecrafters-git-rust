@@ -80,9 +80,7 @@ fn cat_file_command(object: String, flags: CatFlags) -> anyhow::Result<()> {
     }
 
     if flags.print_content {
-        let mut writer = BufWriter::new(stdout().lock());
-        io::copy(&mut reader, &mut writer).context(format!("Failed to output contents from {file_path}"))?;
-        return Ok(());
+        return print_object(&mut reader, size, &file_path);
     }
 
     unreachable!("One of the flags should be always set");
@@ -127,7 +125,7 @@ fn get_compressed_file_reader(file_path: &String) -> anyhow::Result<impl BufRead
     Ok(reader)
 }
 
-fn read_object_type(reader: &mut impl BufRead, file_path: &String) -> anyhow::Result<String> {
+fn read_object_type(reader: &mut impl BufRead, file_path: &str) -> anyhow::Result<String> {
     let mut buf = vec![];
     let _ = reader.take(10).read_until(' ' as u8, &mut buf).context(format!("Failed to extract type from {file_path}"))?;
 
@@ -142,7 +140,7 @@ fn read_object_type(reader: &mut impl BufRead, file_path: &String) -> anyhow::Re
     Ok(object_type)
 }
 
-fn read_object_size(reader: &mut impl BufRead, file_path: &String) -> anyhow::Result<u64> {
+fn read_object_size(reader: &mut impl BufRead, file_path: &str) -> anyhow::Result<u64> {
     let mut buf = vec![];
     let _ = reader.take(20).read_until(0, &mut buf).context(format!("Failed to extract size from {file_path}"))?;
 
@@ -153,4 +151,19 @@ fn read_object_size(reader: &mut impl BufRead, file_path: &String) -> anyhow::Re
 
     let size = size_str.parse::<u64>().context(format!("Failed to extract size from {file_path}: failed to convert to int {size_str}"))?;
     Ok(size)
+}
+
+fn print_object(reader: &mut impl BufRead, expected_size: u64, file_path: &str) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(stdout().lock());
+    let mut sized_reader = reader.take(expected_size);
+    let copied_size = io::copy(&mut sized_reader, &mut writer).context(format!("Failed to output contents from {file_path}"))?;
+    if copied_size != expected_size {
+        bail!("unexpected content size: expected {expected_size} actual {copied_size}");
+    }
+    if let Ok(read_size) = reader.read(&mut [0]) {
+        if read_size > 0 {
+            bail!("content size is larger than expected {expected_size}");
+        }
+    }
+    return Ok(());
 }
