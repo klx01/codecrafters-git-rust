@@ -127,7 +127,14 @@ fn get_compressed_file_reader(file_path: &String) -> anyhow::Result<impl BufRead
 
 fn read_object_type(reader: &mut impl BufRead, file_path: &str) -> anyhow::Result<String> {
     let mut buf = vec![];
-    let _ = reader.take(10).read_until(' ' as u8, &mut buf).context(format!("Failed to extract type from {file_path}"))?;
+    let delimiter = ' ' as u8;
+    let read_size = reader.take(10).read_until(delimiter, &mut buf).context(format!("Failed to extract type from {file_path}"))?;
+    if read_size == 0 {
+        bail!("Failed to read object type from {file_path}, no data was read");
+    }
+    if buf[buf.len() - 1] != delimiter {
+        bail!("Failed to read object type from {file_path}, delimiter not found");
+    }
 
     let object_type = buf[..buf.len() - 1]
         .into_iter()
@@ -142,7 +149,14 @@ fn read_object_type(reader: &mut impl BufRead, file_path: &str) -> anyhow::Resul
 
 fn read_object_size(reader: &mut impl BufRead, file_path: &str) -> anyhow::Result<u64> {
     let mut buf = vec![];
-    let _ = reader.take(20).read_until(0, &mut buf).context(format!("Failed to extract size from {file_path}"))?;
+    let delimiter = 0;
+    let read_size = reader.take(20).read_until(delimiter, &mut buf).context(format!("Failed to extract size from {file_path}"))?;
+    if read_size == 0 {
+        bail!("Failed to read object size from {file_path}, no data was read");
+    }
+    if buf[buf.len() - 1] != delimiter {
+        bail!("Failed to read object size from {file_path}, delimiter not found");
+    }
 
     let size_str = buf[..buf.len() - 1]
         .iter()
