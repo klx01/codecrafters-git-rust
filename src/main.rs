@@ -2,9 +2,12 @@ use std::{fs, io};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, stdout};
 use anyhow::{bail, Context};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::io::prelude::*;
+use flate2::Compression;
 use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use sha1::{Sha1, Digest};
 
 /// a subset of git, implemented as a learning challenge
 #[derive(Parser)]
@@ -20,11 +23,25 @@ enum Command {
 
     /// Provide content for repository objects
     CatFile {
-        /// sha1 hash
-        object: String,
-
         #[clap(flatten)]
         flags: CatFlags,
+
+        /// sha1 hash
+        object: String,
+    },
+
+    /// Compute object ID and optionally create an object from a file
+    HashObject {
+        /// Specify the type of object to be created
+        #[arg(value_enum, default_value = "blob", short = 't')]
+        object_type: ObjectType,
+
+        /// Actually write the object into the object database
+        #[arg(short)]
+        write: bool,
+
+        /// file path
+        file: String,
     },
 }
 
@@ -44,6 +61,18 @@ struct CatFlags {
     print_size: bool,
 }
 
+#[derive(ValueEnum, Clone, Debug)]
+enum ObjectType {
+    Blob,
+}
+impl ObjectType {
+    fn to_str(&self) -> &'static str {
+        match self {
+            ObjectType::Blob => "blob",
+        }
+    }
+}
+
 const OBJECTS_PATH: &'static str = ".git/objects";
 
 fn main() -> anyhow::Result<()> {
@@ -51,6 +80,7 @@ fn main() -> anyhow::Result<()> {
     match a.command {
         Command::Init => init_command(),
         Command::CatFile {object, flags} => cat_file_command(object, flags),
+        Command::HashObject { file, object_type, write } => hash_object_command(file, object_type, write),
     }
 }
 
@@ -180,4 +210,54 @@ fn print_object(reader: &mut impl BufRead, expected_size: u64, file_path: &str) 
         }
     }
     return Ok(());
+}
+
+fn hash_object_command(file_name: String, object_type: ObjectType, write: bool) -> anyhow::Result<()> {
+    let mut file = File::open(&file_name).context(format!("Failed to open file at {file_name}"))?;
+    let meta = file.metadata().context(format!("Failed to extract metadata from {file_name}"))?;
+    let header = format!("{} {}\0", object_type.to_str(), meta.len());
+
+    let hash = calc_object_hash(&file, &header, &file_name)?;
+    println!("{hash}");
+
+    if write {
+        file.rewind().context(format!("Failed to rewind file {file_name}"))?;
+        write_object_file(&file, &header, &hash, &file_name)?;
+    }
+
+    Ok(())
+}
+
+fn calc_object_hash(file: &File, header: &str, file_name: &str) -> anyhow::Result<String> {
+    let mut hasher = Sha1::new();
+    hasher.update(header.as_bytes());
+    drain_reader_into_hasher(&mut hasher, BufReader::new(file)).context(format!("Failed to calc file hash {file_name}"))?;
+    let hash = hex::encode(hasher.finalize());
+    Ok(hash)
+}
+
+fn drain_reader_into_hasher(hasher: &mut impl Digest, mut reader: impl BufRead) -> anyhow::Result<()> {
+    loop {
+        let buf = reader.fill_buf()?;
+        let read_len = buf.len();
+        if read_len == 0 {
+            break;
+        }
+        hasher.update(buf);
+        reader.consume(read_len);
+    }
+    Ok(())
+}
+
+fn write_object_file(orig_file: &File, header: &str, hash: &str, orig_file_name: &str) -> anyhow::Result<()> {
+    let (dir, new_file_name) = hash.split_at(2);
+    let new_file_path = format!("{OBJECTS_PATH}/{dir}/{new_file_name}");
+    let new_file = File::create(&new_file_path).context(format!("Failed to create an object file {new_file_path}"))?;
+
+    let mut encoder = ZlibEncoder::new(new_file, Compression::best());
+    encoder.write(header.as_bytes()).context(format!("Failed to write compressed header data into {new_file_path}"))?;
+    io::copy(&mut BufReader::new(orig_file), &mut encoder).context(format!("Failed to write compressed data from {orig_file_name} to {new_file_path}"))?;
+    encoder.finish().context(format!("Failed to flush compressed data from to {new_file_path}"))?;
+
+    Ok(())
 }
