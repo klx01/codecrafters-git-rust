@@ -42,9 +42,23 @@ impl<R: BufRead> TreeObjectIterator<R> {
             None
         }
     }
+    fn parse(&mut self) -> anyhow::Result<Option<TreeEntry>> {
+        let res = self.parse_inner();
+        match res {
+            Ok(x) => Ok(x),
+            Err(x) => {
+                self.reader.take();
+                Err(x)
+            }
+        }
+    }
     fn parse_inner(&mut self) -> anyhow::Result<Option<TreeEntry>> {
-        let reader = self.reader.take();
-        let Some(mut reader) = reader else {
+        /*
+        this method is a bit weird because i need to have both the original reader and a view into it with a limited size
+        it would be a bit more simple if i could put both of them in one struct
+         */
+        let reader = self.reader.as_mut();
+        let Some(reader) = reader else {
             return Ok(None);
         };
 
@@ -53,9 +67,9 @@ impl<R: BufRead> TreeObjectIterator<R> {
         let mut sized_reader = reader.by_ref().take(size_left);
         self.entry_no += 1;
 
-        let attrs = self.parse_attributes(&mut sized_reader)?;
+        let attrs = Self::parse_attributes(&mut sized_reader, self.entry_no, &self.file_path)?;
         let Some(attrs) = attrs else {
-            if crate::object_read::is_end_of_reader(reader) {
+            if crate::object_read::is_end_of_reader(self.reader.take().unwrap()) {
                 return Ok(None);
             } else {
                 bail!("content size is larger than expected {}", self.size);
@@ -64,17 +78,16 @@ impl<R: BufRead> TreeObjectIterator<R> {
         let attrs_len = attrs.as_bytes().len();
         let attrs = attrs.parse().context(format!("Failed to pars attributes as int for entry {} from {}", self.entry_no, self.file_path))?;
 
-        let name = self.parse_name(&mut sized_reader)?;
-        let sha = self.parse_sha(&mut sized_reader)?;
+        let name = Self::parse_name(&mut sized_reader, self.entry_no, &self.file_path)?;
+        let sha = Self::parse_sha(&mut sized_reader, self.entry_no, &self.file_path)?;
 
         let bytes_read =
             attrs_len
-                + 1 // delimiter ' ' 
+                + 1 // delimiter ' '
                 + name.as_bytes().len()
                 + 1  // delimiter '\0'
                 + 20; // sha
         self.bytes_read += bytes_read as u64;
-        self.reader = Some(reader); // todo: this is very weird, need to fix it
 
         let res = TreeEntry {
             attributes: attrs,
@@ -83,44 +96,44 @@ impl<R: BufRead> TreeObjectIterator<R> {
         };
         Ok(Some(res))
     }
-    fn parse_attributes(&mut self, reader: &mut impl BufRead) -> anyhow::Result<Option<String>> {
+    fn parse_attributes(reader: &mut impl BufRead, entry: usize, file_path: &String) -> anyhow::Result<Option<String>> {
         let mut buffer = vec![];
         let delimiter = ' ' as u8;
         reader.take(10).read_until(delimiter, &mut buffer)
-            .context(format!("Failed to read attributes for entry {} from {}", self.entry_no, self.file_path))?;
+            .context(format!("Failed to read attributes for entry {entry} from {file_path}"))?;
         let Some((last, attrs)) = buffer.split_last() else {
             return Ok(None);
         };
         if *last != delimiter {
-            bail!("Failed to read attributes for entry {} from {}, delimiter not found", self.entry_no, self.file_path);
+            bail!("Failed to read attributes for entry {entry} from {file_path}, delimiter not found");
         }
         if attrs.len() == 0 {
-            bail!("Failed to read attributes for entry {} from {}: empty name", self.entry_no, self.file_path);
+            bail!("Failed to read attributes for entry {entry} from {file_path}: empty name");
         }
         let attrs = attrs.into_iter().map(|x| *x as char).collect();
         Ok(Some(attrs))
     }
-    fn parse_name(&mut self, reader: &mut impl BufRead) -> anyhow::Result<String> {
+    fn parse_name(reader: &mut impl BufRead, entry: usize, file_path: &String) -> anyhow::Result<String> {
         let mut buffer = vec![];
         let name_delimiter = 0;
         reader.read_until(name_delimiter, &mut buffer)
-            .context(format!("Failed to read file name for entry {} from {}", self.entry_no, self.file_path))?;
+            .context(format!("Failed to read file name for entry {entry} from {file_path}"))?;
         let Some((last, name)) = buffer.split_last() else {
-            bail!("Failed to read file name for entry {} from {}: reached end", self.entry_no, self.file_path);
+            bail!("Failed to read file name for entry {entry} from {file_path}: reached end");
         };
         if *last != name_delimiter {
-            bail!("Failed to read file name for entry {} from {}: delimiter not found", self.entry_no, self.file_path);
+            bail!("Failed to read file name for entry {entry} from {file_path}: delimiter not found");
         }
         if name.len() == 0 {
-            bail!("Failed to read file name for entry {} from {}: empty name", self.entry_no, self.file_path);
+            bail!("Failed to read file name for entry {entry} from {file_path}: empty name");
         }
         let name = name.into_iter().map(|x| *x as char).collect();
         Ok(name)
     }
-    fn parse_sha(&mut self, reader: &mut impl BufRead) -> anyhow::Result<String> {
+    fn parse_sha(reader: &mut impl BufRead, entry: usize, file_path: &String) -> anyhow::Result<String> {
         let mut sha_buf = [0u8; 20];
         reader.read_exact(&mut sha_buf)
-            .context(format!("Failed to read hash for entry {} from {}", self.entry_no, self.file_path))?;
+            .context(format!("Failed to read hash for entry {entry} from {file_path}"))?;
         let hash = hex::encode(sha_buf);
         Ok(hash)
     }
@@ -130,7 +143,7 @@ impl<R: BufRead> Iterator for TreeObjectIterator<R> {
     type Item = anyhow::Result<TreeEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let res = self.parse_inner();
+        let res = self.parse();
         match res {
             Ok(Some(x)) => Some(Ok(x)),
             Ok(None) => None,
