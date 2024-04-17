@@ -5,6 +5,8 @@ use clap::ValueEnum;
 pub const GIT_PATH: &'static str = ".git";
 pub const OBJECTS_PATH: &'static str = ".git/objects";
 pub const MAX_OBJECT_SIZE: u64 = 1 * 1024 * 1024 * 1024; // 1 GB
+pub const COMMIT_AUTHOR: &'static str =  "test";
+pub const COMMIT_EMAIL: &'static str =  "example@example.com";
 
 #[derive(ValueEnum, Copy, Clone, Debug, PartialEq)]
 pub enum ObjectType {
@@ -86,4 +88,10 @@ pub fn make_object_header(object_type: ObjectType, size: u64) -> String {
 pub fn get_object_path_by_hash(hash: &str) -> String {
     let (dir, new_file_name) = hash.split_at(2);
     format!("{OBJECTS_PATH}/{dir}/{new_file_name}")
+}
+
+pub fn get_hash_by_object_path(file_path: &str) -> String {
+    let file_path = &file_path[OBJECTS_PATH.len() + 1..];
+    let (dir, name) = file_path.split_once('/').unwrap();
+    format!("{dir}{name}")
 }

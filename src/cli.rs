@@ -47,6 +47,22 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Create a new commit object
+    CommitTree {
+        // todo: currently handle only 1 parent, can't handle multiple parents (merge commits)
+        /// The id of a parent commit object. Can be empty for the initial commit
+        #[arg(short)]
+        parent: Option<String>,
+        // todo: actual git allows multiple messages (and they get concatenated)
+        /// A paragraph in the commit log message
+        #[arg(short)]
+        message: String,
+        /// Only print the hash, do not actually write the commit object
+        #[arg(long)]
+        dry_run: bool,
+        /// An existing tree object
+        tree: String,
+    }
 }
 
 #[derive(Args)]

@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io;
+use std::{fs, io};
 use std::io::{BufRead, BufReader};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
@@ -47,6 +47,10 @@ pub fn write_object_file(object_data: NewObjectData<impl Read>) -> anyhow::Resul
         } else {
             bail!("Object {hash} already exists, and has a different header. Expected {header}, existing {existing_header}");
         }
+    }
+    let dir_path = new_file_path.parent().unwrap();
+    if !dir_path.exists() {
+        fs::create_dir(dir_path).context(format!("Failed to create folder at {dir_path:?}"))?;
     }
     let new_file = File::create(new_file_path).context(format!("Failed to create an object file {new_file_path_str}"))?;
 
