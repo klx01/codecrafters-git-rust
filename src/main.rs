@@ -1,15 +1,15 @@
 use std::fs;
-use std::io::{BufReader, BufWriter, Read, stdout};
+use std::io::{BufWriter, stdout};
 use anyhow::{bail, Context};
 use clap::{Parser};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use git_starter_rust::cli::{CatFlags, Cli, Command};
-use git_starter_rust::common::{COMMIT_AUTHOR, COMMIT_EMAIL, get_hash_by_object_path, GIT_PATH, make_object_header, OBJECTS_PATH, ObjectType};
-use git_starter_rust::object_write::{calc_object_hash, create_blob_object, NewObjectData, write_object_file};
+use git_starter_rust::common::{COMMIT_AUTHOR, COMMIT_EMAIL, COMMIT_TIMEZONE, GIT_PATH, OBJECTS_PATH, ObjectType};
+use git_starter_rust::object_write::{hash_blob, hash_commit};
 use git_starter_rust::object_read::{*};
 use git_starter_rust::tree_object_read::TreeObjectIterator;
-use git_starter_rust::tree_object_write::{create_and_write_tree_object, create_tree_object};
+use git_starter_rust::tree_object_write::hash_tree;
 
 
 fn main() -> anyhow::Result<()> {
@@ -76,12 +76,8 @@ fn hash_object_command(file_name: String, object_type: ObjectType, write: bool) 
         bail!("Command is not implemented for {}", object_type.to_str());
     }
     let path = PathBuf::from(file_name);
-    let object = create_blob_object(path, write)?;
-    println!("{}", object.hash);
-
-    if write {
-        write_object_file(object)?;
-    }
+    let hash = hash_blob(path, write)?;
+    println!("{hash}");
 
     Ok(())
 }
@@ -110,65 +106,27 @@ fn ls_tree_command(object: String, name_only: bool) -> anyhow::Result<()> {
 
 fn write_tree_command(dry_run: bool) -> anyhow::Result<()> {
     let path = PathBuf::from(".");
-    let hash = if dry_run {
-        let tree = create_tree_object(path)?;
-        tree.hash
-    } else {
-        create_and_write_tree_object(path)?
-    };
+    let hash = hash_tree(path, !dry_run)?;
     println!("{hash}");
     Ok(())
 }
 
 fn commit_tree_command(tree: String, parent: Option<String>, message: String, dry_run: bool) -> anyhow::Result<()> {
-    let tree = validate_object_hash(tree, ObjectType::Tree)?;
-
-    let parent_line = match parent {
-        Some(parent) => {
-            let parent = validate_object_hash(parent, ObjectType::Commit)?;
-            format!("\nparent {parent}")
-        }
-        None => String::new(),
-    };
-
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
         .context("Failed to get current timestamp")?
         .as_secs();
-    
-    let data = format!("tree {tree}{parent_line}
-author {COMMIT_AUTHOR} <{COMMIT_EMAIL}> {timestamp} +0000
-committer {COMMIT_AUTHOR} <{COMMIT_EMAIL}> {timestamp} +0000
 
-{message}
-");
-    let object = create_commit_object(&data)?;
-
-    let hash = if dry_run {
-        object.hash
-    } else {
-        write_object_file(object)?  
-    };
+    let hash = hash_commit(
+        &tree,
+        parent.as_ref().map(|x| x.as_str()),
+        &message,
+        COMMIT_AUTHOR,
+        COMMIT_EMAIL,
+        timestamp,
+        COMMIT_TIMEZONE,
+        !dry_run,
+    )?;
     println!("{hash}");
 
     Ok(())
-}
-
-fn validate_object_hash(hash: String, expected_type: ObjectType) -> anyhow::Result<String> {
-    let object = find_and_decode_object(&hash)?;
-    if object.object_type != expected_type {
-        bail!("Provided object {hash} is not a {}, it is actually a {}", expected_type.to_str(), object.object_type.to_str());
-    }
-    let hash = get_hash_by_object_path(&object.file_path);
-    Ok(hash)
-}
-
-fn create_commit_object(data: &str) -> anyhow::Result<NewObjectData<impl Read + '_>> {
-    let header = make_object_header(ObjectType::Commit, data.bytes().len() as u64);
-    let hash = calc_object_hash(BufReader::new(data.as_bytes()), &header).context("Failed to calc hash for commit")?;
-    let res = NewObjectData {
-        hash,
-        header,
-        data_reader: BufReader::new(data.as_bytes()),
-    };
-    Ok(res)
 }

@@ -1,94 +1,112 @@
 use std::fs::File;
 use std::{fs, io};
-use std::io::{BufRead, BufReader};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use sha1::{Digest, Sha1};
 use crate::common::{get_object_path_by_hash, make_object_header, ObjectType};
-use anyhow::{bail, Context};
+use anyhow::Context;
 use std::io::prelude::*;
 use std::path::PathBuf;
-use crate::object_read::read_and_decode_object_file;
+use crate::object_read::validate_existing_hash;
 
-pub struct NewObjectData<R: Read> {
-    pub hash: String,
-    pub header: String,
-    pub data_reader: R,
+struct HashWriter<W: Write, H: Digest> {
+    hasher: H,
+    writer: W,
+}
+impl<W: Write, H: Digest> Write for HashWriter<W, H> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written_size = self.writer.write(buf)?;
+        self.hasher.update(&buf[..written_size]);
+        Ok(written_size)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
 }
 
-pub fn create_blob_object(path: PathBuf, rewind: bool) -> anyhow::Result<NewObjectData<impl Read>> {
-    let mut file = File::open(&path).context(format!("Failed to open file at {path:?}"))?;
+static TEMPORARY_FILE: &'static str = ".git/temp_file";
+
+pub fn hash_blob(path: PathBuf, write_file: bool) -> anyhow::Result<String> {
+    let file = File::open(&path).context(format!("Failed to open file at {path:?}"))?;
     let meta = file.metadata().context(format!("Failed to extract metadata from {path:?}"))?;
-    let header = make_object_header(ObjectType::Blob, meta.len());
-
-    let hash = calc_object_hash(BufReader::new(&file), &header).context(format!("Failed to calc hash for {path:?}"))?;
-
-    if rewind {
-        file.rewind().context(format!("Failed to rewind file {path:?}"))?;
-    }
-    let res = NewObjectData {
-        hash,
-        header,
-        data_reader: file,
-    };
-    Ok(res)
+    hash_object(file, ObjectType::Blob, meta.len(), write_file)
 }
 
-pub fn write_object_file(object_data: NewObjectData<impl Read>) -> anyhow::Result<String> {
-    let NewObjectData{hash, header, mut data_reader} = object_data;
+pub fn hash_commit(tree: &str, parent: Option<&str>, message: &str, author: &str, email: &str, timestamp: u64, timezone: &str, write_file: bool) -> anyhow::Result<String> {
+    let data = create_commit_body(tree, parent, message, author, email, timestamp, timezone)?;
+    let hash = hash_object(data.as_bytes(), ObjectType::Commit, data.as_bytes().len() as u64, write_file)?;
+    Ok(hash)
+}
 
-    let new_file_path_str = get_object_path_by_hash(&hash);
-    let new_file_path = PathBuf::from(&new_file_path_str);
-    if new_file_path.exists() {
-        let existing_data = read_and_decode_object_file(new_file_path_str.clone())?;
-        let existing_header = make_object_header(existing_data.object_type, existing_data.size);
-        if existing_header == header {
-            return Ok(hash);
-        } else {
-            bail!("Object {hash} already exists, and has a different header. Expected {header}, existing {existing_header}");
+fn create_commit_body(tree: &str, parent: Option<&str>, message: &str, author: &str, email: &str, timestamp: u64, timezone: &str) -> anyhow::Result<String> {
+    let tree = validate_existing_hash(tree, ObjectType::Tree)?;
+
+    let parent_line = match parent {
+        Some(parent) => {
+            let parent = validate_existing_hash(parent, ObjectType::Commit)?;
+            format!("\nparent {parent}")
         }
-    }
-    let dir_path = new_file_path.parent().unwrap();
+        None => String::new(),
+    };
+
+    let data = format!("tree {tree}{parent_line}
+author {author} <{email}> {timestamp} {timezone}
+committer {author} <{email}> {timestamp} {timezone}
+
+{message}
+");
+    Ok(data)
+}
+
+pub fn hash_object(reader: impl Read, object_type: ObjectType, size: u64, write_file: bool) -> anyhow::Result<String> {
+    let hash = if write_file {
+        let writer = get_temporary_file_writer()?;
+        let hash = hash_write(reader, object_type, size, writer)?;
+        move_temporary_file(&hash)?;
+        hash
+    } else {
+        hash_write(reader, object_type, size, io::sink())?
+    };
+    Ok(hash)
+}
+
+fn hash_write(mut reader: impl Read, object_type: ObjectType, size: u64, writer: impl Write) -> anyhow::Result<String> {
+    let hasher = Sha1::new();
+    let mut writer = HashWriter {hasher, writer};
+    let header = make_object_header(object_type, size);
+    writer.write(header.as_bytes()).context("Failed to hash and write header")?;
+    io::copy(&mut reader, &mut writer).context("Failed to hash and write data")?;
+    writer.flush().context("Failed to flush data")?;
+    let hash = hex::encode(writer.hasher.finalize());
+    Ok(hash)
+}
+
+fn get_temporary_file_writer() -> anyhow::Result<impl Write> {
+    let file = File::create(TEMPORARY_FILE).context(format!("Failed to create the temp file at {TEMPORARY_FILE}"))?;
+    let encoder = ZlibEncoder::new(file, Compression::best());
+    Ok(encoder)
+}
+
+fn move_temporary_file(hash: &str) -> anyhow::Result<()> {
+    let path_str = get_object_path_by_hash(hash);
+    let path = PathBuf::from(&path_str);
+    let dir_path = path.parent().unwrap();
     if !dir_path.exists() {
         fs::create_dir(dir_path).context(format!("Failed to create folder at {dir_path:?}"))?;
     }
-    let new_file = File::create(new_file_path).context(format!("Failed to create an object file {new_file_path_str}"))?;
-
-    let mut encoder = ZlibEncoder::new(new_file, Compression::best());
-    encoder.write(header.as_bytes()).context(format!("Failed to write compressed header data into {new_file_path_str}"))?;
-    io::copy(&mut data_reader, &mut encoder).context(format!("Failed to write compressed data from reader to {new_file_path_str}"))?;
-    encoder.finish().context(format!("Failed to flush compressed data from to {new_file_path_str}"))?;
-
-    Ok(hash)
-}
-
-pub fn calc_object_hash(reader: impl BufRead, header: &str) -> anyhow::Result<String> {
-    let mut hasher = Sha1::new();
-    hasher.update(header.as_bytes());
-    drain_reader_into_hasher(&mut hasher, reader)?;
-    let hash = hex::encode(hasher.finalize());
-    Ok(hash)
-}
-
-fn drain_reader_into_hasher(hasher: &mut impl Digest, mut reader: impl BufRead) -> anyhow::Result<()> {
-    loop {
-        let buf = reader.fill_buf()?;
-        let read_len = buf.len();
-        if read_len == 0 {
-            break;
-        }
-        hasher.update(buf);
-        reader.consume(read_len);
-    }
+    fs::rename(TEMPORARY_FILE, path).context(format!("Failed move temporary file to {path_str}"))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    
-    const TEST_HASH: &'static str = "345b19aec241ec34d3e111a44ee2a14236f13856";
-    const TEST_FILE_DATA: &'static str = "# Generated by Cargo
+
+    const TEST_BLOB_HASH: &'static str = "345b19aec241ec34d3e111a44ee2a14236f13856";
+    const TEST_FILE_DATA: &'static str =
+"# Generated by Cargo
 # will have compiled files and executables
 debug/
 target/
@@ -101,15 +119,51 @@ target/
 
 .idea/
 ";
-    
+
+    const TEST_COMMIT_HASH: &'static str = "8b096f5e616c053616e3b2d7a2dbb406d7aa62a4";
+    const TEST_COMMIT_BODY: &'static str =
+"tree 6e74c679c172940efe61d06006bffe61eb3319be
+parent e2928772961aaadcf89d8e0b9c2efd4ffa7f03db
+author klx01 <69247896+klx01@users.noreply.github.com> 1713381411 +0400
+committer klx01 <69247896+klx01@users.noreply.github.com> 1713381411 +0400
+
+implement commit-tree
+";
+
+
     #[test]
-    fn test_create_blob_object() -> anyhow::Result<()> {
-        let data_len = TEST_FILE_DATA.as_bytes().len();
-        let header = make_object_header(ObjectType::Blob, data_len as u64);
-        assert_eq!(format!("blob {data_len}\0"), header);
-        let reader = BufReader::new(TEST_FILE_DATA.as_bytes());
-        let hash = calc_object_hash(reader, &header)?;
-        assert_eq!(TEST_HASH, hash);
+    fn test_hash_object() -> anyhow::Result<()> {
+        let test_data = TEST_FILE_DATA.as_bytes();
+        let hash = hash_object(test_data, ObjectType::Blob, test_data.len() as u64, false)?;
+        assert_eq!(TEST_BLOB_HASH, hash);
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_commit() -> anyhow::Result<()> {
+        let author = "klx01";
+        let email = "69247896+klx01@users.noreply.github.com";
+        let message = "implement commit-tree";
+        let tree = "6e74c679c172940efe61d06006bffe61eb3319be";
+        let parent = "e2928772961aaadcf89d8e0b9c2efd4ffa7f03db";
+        let timestamp = 1713381411;
+        let timezone = "+0400";
+
+        let commit = create_commit_body(tree, Some(parent), message, author, email, timestamp, timezone)?;
+        assert_eq!(TEST_COMMIT_BODY, commit);
+
+        let commit = create_commit_body(&tree[..20], Some(&parent[..20]), message, author, email, timestamp, timezone)?;
+        assert_eq!(TEST_COMMIT_BODY, commit);
+
+        let hash = hash_commit(tree, Some(parent), message, author, email, timestamp, timezone, false)?;
+        assert_eq!(TEST_COMMIT_HASH, hash);
+
+        let res = create_commit_body(tree, Some(tree), message, author, email, timestamp, timezone);
+        assert!(res.is_err());
+
+        let res = create_commit_body(parent, Some(parent), message, author, email, timestamp, timezone);
+        assert!(res.is_err());
+
         Ok(())
     }
 }

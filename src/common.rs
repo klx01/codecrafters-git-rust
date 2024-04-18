@@ -7,6 +7,7 @@ pub const OBJECTS_PATH: &'static str = ".git/objects";
 pub const MAX_OBJECT_SIZE: u64 = 1 * 1024 * 1024 * 1024; // 1 GB
 pub const COMMIT_AUTHOR: &'static str =  "test";
 pub const COMMIT_EMAIL: &'static str =  "example@example.com";
+pub const COMMIT_TIMEZONE: &'static str =  "+0400";
 
 #[derive(ValueEnum, Copy, Clone, Debug, PartialEq)]
 pub enum ObjectType {

@@ -4,7 +4,7 @@ use std::io::{Read, BufReader, Write};
 use std::io::prelude::*;
 use anyhow::{bail, Context};
 use flate2::read::ZlibDecoder;
-use crate::common::{MAX_OBJECT_SIZE, OBJECTS_PATH, ObjectType};
+use crate::common::{get_hash_by_object_path, MAX_OBJECT_SIZE, OBJECTS_PATH, ObjectType};
 
 pub struct LazyDecodedObject<R: Read> {
     pub file_path: String,
@@ -31,12 +31,17 @@ impl<R: Read> LazyDecodedObject<R> {
     }
 }
 
-pub fn find_and_decode_object(object: &str) -> anyhow::Result<LazyDecodedObject<impl BufRead>> {
-    let file_path = find_object_file(object)?;
-    read_and_decode_object_file(file_path)
+pub fn validate_existing_hash(hash: &str, expected_type: ObjectType) -> anyhow::Result<String> {
+    let object = find_and_decode_object(&hash)?;
+    if object.object_type != expected_type {
+        bail!("Provided object {hash} is not a {}, it is actually a {}", expected_type.to_str(), object.object_type.to_str());
+    }
+    let hash = get_hash_by_object_path(&object.file_path);
+    Ok(hash)
 }
 
-pub fn read_and_decode_object_file(file_path: String) -> anyhow::Result<LazyDecodedObject<impl BufRead>> {
+pub fn find_and_decode_object(object: &str) -> anyhow::Result<LazyDecodedObject<impl BufRead>> {
+    let file_path = find_object_file(object)?;
     let mut reader = get_compressed_file_reader(&file_path)?;
     let object_type = read_object_type(&mut reader, &file_path)?;
     let size = read_object_size(&mut reader, &file_path)?;
@@ -170,6 +175,19 @@ target/
         let mut file_data = String::new();
         object_data.reader.read_to_string(&mut file_data)?;
         assert_eq!(TEST_FILE_DATA, file_data);
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_existing_hash() -> anyhow::Result<()> {
+        let res = validate_existing_hash(TEST_HASH, ObjectType::Blob)?;
+        assert_eq!(TEST_HASH, res);
+        let res = validate_existing_hash(&TEST_HASH[..20], ObjectType::Blob)?;
+        assert_eq!(TEST_HASH, res);
+        let res = validate_existing_hash(TEST_HASH, ObjectType::Tree);
+        assert!(res.is_err());
+        let res = validate_existing_hash("zzzzzzzz", ObjectType::Blob);
+        assert!(res.is_err());
         Ok(())
     }
 }

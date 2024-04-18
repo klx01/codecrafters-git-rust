@@ -1,33 +1,18 @@
 use std::cmp::Ordering;
 use std::fs;
-use std::io::{BufReader, Cursor, Read, Write};
+use std::io::Write;
 use anyhow::{bail, Context};
-use crate::common::{GIT_PATH, make_object_header, ObjectMode, ObjectType, TreeItem};
-use crate::object_write::{calc_object_hash, create_blob_object, NewObjectData, write_object_file};
+use crate::common::{GIT_PATH, ObjectMode, ObjectType, TreeItem};
+use crate::object_write::{hash_blob, hash_object};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-pub fn create_tree_object(dir_path: PathBuf) -> anyhow::Result<NewObjectData<impl Read>> {
-    create_tree_object_internal(dir_path, false)
-}
-
-pub fn create_and_write_tree_object(dir_path: PathBuf) -> anyhow::Result<String> {
-    let object = create_tree_object_internal(dir_path, true)?;
-    write_object_file(object)
-}
-
-fn create_tree_object_internal(dir_path: PathBuf, write_files: bool) -> anyhow::Result<NewObjectData<impl Read>> {
+pub fn hash_tree(dir_path: PathBuf, write_files: bool) -> anyhow::Result<String> {
     let tree = get_tree_entries(dir_path, write_files)?;
     let tree_vec = tree_into_bytes_raw(&tree)?;
     let tree_vec_len = tree_vec.len();
-    let header = make_object_header(ObjectType::Tree, tree_vec_len as u64);
-    let hash = calc_object_hash(BufReader::new(&tree_vec[..]), &header).context("Failed to calc hash")?;
-    let res = NewObjectData {
-        hash,
-        header,
-        data_reader: Cursor::new(tree_vec),
-    };
-    Ok(res)
+    let hash = hash_object(tree_vec.as_slice(), ObjectType::Tree, tree_vec_len as u64, write_files)?;
+    Ok(hash)
 }
 
 fn get_tree_entries(dir_path: PathBuf, write_files: bool) -> anyhow::Result<Vec<TreeItem>> {
@@ -55,27 +40,15 @@ fn get_tree_entries(dir_path: PathBuf, write_files: bool) -> anyhow::Result<Vec<
 
         let tree_item = if meta.is_dir() {
             let mode = ObjectMode::Tree;
-            let object = create_tree_object_internal(path, write_files)?;
-            
-            let hash = if write_files {
-                write_object_file(object)?
-            } else {
-                object.hash
-            };
+            let hash = hash_tree(path, write_files)?;
             TreeItem {mode, file_name, hash}
         } else if meta.is_file() {
-            let mode = if meta.permissions().mode() & 0o111 != 0 { 
-                ObjectMode::Executable 
-            } else { 
-                ObjectMode::Normal 
-            };
-            let object = create_blob_object(path, write_files)?;
-            
-            let hash = if write_files {
-                write_object_file(object)?
+            let mode = if meta.permissions().mode() & 0o111 != 0 {
+                ObjectMode::Executable
             } else {
-                object.hash
+                ObjectMode::Normal
             };
+            let hash = hash_blob(path, write_files)?;
             TreeItem {mode, file_name, hash}
         } else {
             bail!("found path is neither dir nor file {file_name}");
