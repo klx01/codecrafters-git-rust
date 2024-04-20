@@ -6,7 +6,7 @@ use sha1::{Digest, Sha1};
 use crate::common::{get_object_path_by_hash, ObjectType};
 use anyhow::{bail, Context};
 use std::io::prelude::*;
-use std::path::PathBuf;
+use std::path::Path;
 use crate::object_read::validate_existing_hash;
 
 struct HashWriter<W: Write, H: Digest> {
@@ -28,13 +28,13 @@ impl<W: Write, H: Digest> Write for HashWriter<W, H> {
 
 static TEMPORARY_FILE: &'static str = ".git/temp_file";
 
-pub fn hash_blob(path: &PathBuf, write_file: bool) -> anyhow::Result<String> {
-    let file = File::open(&path).context(format!("Failed to open file at {}", path.display()))?;
+pub(crate) fn hash_blob(path: &Path, write_file: bool) -> anyhow::Result<String> {
+    let file = File::open(path).context(format!("Failed to open file at {}", path.display()))?;
     let meta = file.metadata().context(format!("Failed to extract metadata from {}", path.display()))?;
     hash_object(file, ObjectType::Blob, meta.len(), write_file)
 }
 
-pub fn hash_commit(tree: &str, parent: Option<&str>, message: &str, author: &str, email: &str, timestamp: u64, timezone: &str, write_file: bool) -> anyhow::Result<String> {
+pub(crate) fn hash_commit(tree: &str, parent: Option<&str>, message: &str, author: &str, email: &str, timestamp: u64, timezone: &str, write_file: bool) -> anyhow::Result<String> {
     let data = create_commit_body(tree, parent, message, author, email, timestamp, timezone)?;
     let hash = hash_object(data.as_bytes(), ObjectType::Commit, data.as_bytes().len() as u64, write_file)?;
     Ok(hash)
@@ -60,7 +60,7 @@ committer {author} <{email}> {timestamp} {timezone}
     Ok(data)
 }
 
-pub fn hash_object(reader: impl Read, object_type: ObjectType, size: u64, write_file: bool) -> anyhow::Result<String> {
+pub(crate) fn hash_object(reader: impl Read, object_type: ObjectType, size: u64, write_file: bool) -> anyhow::Result<String> {
     let hash = if write_file {
         let writer = get_temporary_file_writer()?;
         let hash = hash_write(reader, object_type, size, writer)?;
@@ -95,7 +95,7 @@ fn get_temporary_file_writer() -> anyhow::Result<impl Write> {
 
 fn move_temporary_file(hash: &str) -> anyhow::Result<()> {
     let path_str = get_object_path_by_hash(hash);
-    let path = PathBuf::from(&path_str);
+    let path = Path::new(&path_str);
     let dir_path = path.parent().unwrap();
     if !dir_path.exists() {
         fs::create_dir(dir_path).context(format!("Failed to create folder at {}", dir_path.display()))?;
@@ -114,8 +114,8 @@ mod test {
     #[test]
     fn test_hash_blob() -> anyhow::Result<()> {
         init_test()?;
-        let path = PathBuf::from("data/data.txt");
-        let hash = hash_blob(&path, true)?;
+        let path = Path::new("data/data.txt");
+        let hash = hash_blob(path, true)?;
         assert_eq!("bae42c55f9e0a4e297a4d197d8aadfe147ef269b", hash);
 
         let expected_data = "test1\ntest2\n";
@@ -131,8 +131,8 @@ mod test {
     #[test]
     fn test_hash_commit() -> anyhow::Result<()> {
         init_test()?;
-        let path = PathBuf::from(".");
-        let tree = hash_tree(&path, true)?.unwrap();
+        let path = Path::new(".");
+        let tree = hash_tree(path, true)?.unwrap();
         assert_eq!("0b70d742c267c707ebd81d8968fc2e696a9e2edb", tree);
 
         let author = COMMIT_AUTHOR;

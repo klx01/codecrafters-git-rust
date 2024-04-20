@@ -6,7 +6,7 @@ use anyhow::{bail, Context};
 use flate2::read::ZlibDecoder;
 use crate::common::{get_hash_by_object_path, HASH_ENCODED_LEN, HASH_RAW_LEN, MAX_OBJECT_SIZE, MIN_OBJECT_SEARCH_LEN, OBJECT_DIR_LEN, OBJECTS_PATH, ObjectType};
 
-pub struct LazyDecodedObject<R: Read> {
+pub(crate) struct LazyDecodedObject<R: Read> {
     pub file_path: String,
     pub object_type: ObjectType,
     pub size: u64,
@@ -29,6 +29,7 @@ impl<R: Read> LazyDecodedObject<R> {
         let Self {file_path, object_type, size, reader} = self;
         (file_path, object_type, size, reader)
     }
+    #[cfg(test)]
     pub fn destruct_into_string(self)  -> anyhow::Result<(String, ObjectType, u64, String)> {
         let mut vec = vec![];
         let (file_path, object_type, size) = self.drain_into_writer_raw(&mut vec)?;
@@ -37,7 +38,7 @@ impl<R: Read> LazyDecodedObject<R> {
     }
 }
 
-pub fn validate_existing_hash(hash: &str, expected_type: ObjectType) -> anyhow::Result<String> {
+pub(crate) fn validate_existing_hash(hash: &str, expected_type: ObjectType) -> anyhow::Result<String> {
     let object = find_and_decode_object(&hash)?;
     if object.object_type != expected_type {
         bail!("Provided object {hash} is not a {}, it is actually a {}", expected_type.to_str(), object.object_type.to_str());
@@ -46,7 +47,7 @@ pub fn validate_existing_hash(hash: &str, expected_type: ObjectType) -> anyhow::
     Ok(hash)
 }
 
-pub fn find_and_decode_object(object: &str) -> anyhow::Result<LazyDecodedObject<impl BufRead>> {
+pub(crate) fn find_and_decode_object(object: &str) -> anyhow::Result<LazyDecodedObject<impl BufRead>> {
     let file_path = find_object_file(object)?;
     let mut reader = get_compressed_file_reader(&file_path)?;
     let object_type = read_object_type(&mut reader, &file_path)?;
@@ -60,7 +61,7 @@ pub fn find_and_decode_object(object: &str) -> anyhow::Result<LazyDecodedObject<
     Ok(res)
 }
 
-pub fn find_object_file(object: &str) -> anyhow::Result<String> {
+pub(crate) fn find_object_file(object: &str) -> anyhow::Result<String> {
     let len = object.len();
     if (len < MIN_OBJECT_SEARCH_LEN) || (len > HASH_ENCODED_LEN) {
         bail!("Invalid object name {object}");
@@ -145,7 +146,7 @@ fn read_object_size(reader: &mut impl BufRead, file_path: &str) -> anyhow::Resul
     Ok(size)
 }
 
-pub fn is_end_of_reader(mut reader: impl Read) -> bool {
+pub(crate) fn is_end_of_reader(mut reader: impl Read) -> bool {
     let result = reader.read(&mut [0]);
     match result {
         Ok(0) => true,

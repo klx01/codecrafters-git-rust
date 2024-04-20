@@ -1,15 +1,21 @@
 use std::io::{BufWriter, stdout, Write};
 use anyhow::{bail, Context};
 use clap::{Parser};
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use git_starter_rust::cli::{CatFlags, Cli, Command};
-use git_starter_rust::common::{COMMIT_AUTHOR, COMMIT_EMAIL, COMMIT_TIMEZONE, init_repo, ObjectType, TreeItem};
-use git_starter_rust::object_write::{hash_blob, hash_commit};
-use git_starter_rust::object_read::{*};
-use git_starter_rust::tree_object_read::TreeObjectIterator;
-use git_starter_rust::tree_object_write::hash_tree;
+use crate::cli::{CatFlags, Cli, Command};
+use crate::common::{COMMIT_AUTHOR, COMMIT_EMAIL, COMMIT_TIMEZONE, init_repo, ObjectType, TreeItem};
+use crate::object_write::{hash_blob, hash_commit};
+use crate::object_read::{*};
+use crate::tree_object_read::TreeObjectIterator;
+use crate::tree_object_write::hash_tree;
 
+mod cli;
+mod common;
+mod object_read;
+mod object_write;
+mod tree_object_read;
+mod tree_object_write;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -68,8 +74,8 @@ fn hash_object_command(file_name: String, object_type: ObjectType, write: bool) 
     if object_type != ObjectType::Blob {
         bail!("Command is not implemented for {object_type}");
     }
-    let path = PathBuf::from(file_name);
-    let hash = hash_blob(&path, write)?;
+    let path = Path::new(&file_name);
+    let hash = hash_blob(path, write)?;
     println!("{hash}");
 
     Ok(())
@@ -98,8 +104,8 @@ fn ls_tree_command(object: String, name_only: bool) -> anyhow::Result<()> {
 }
 
 fn write_tree_command(dry_run: bool) -> anyhow::Result<()> {
-    let path = PathBuf::from(".");
-    let hash = hash_tree(&path, !dry_run)?;
+    let path = Path::new(".");
+    let hash = hash_tree(path, !dry_run)?;
     let Some(hash) = hash else {
         bail!("Tree is empty");
     };

@@ -5,7 +5,7 @@ use crate::common::{HASH_RAW_LEN, ObjectType, TreeItem};
 use crate::object_read::LazyDecodedObject;
 use std::os::unix::ffi::OsStrExt;
 
-pub struct TreeObjectIterator<R: BufRead> {
+pub(crate) struct TreeObjectIterator<R: BufRead> {
     pub file_path: String,
     pub size: u64,
     reader: Option<R>,

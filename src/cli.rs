@@ -3,13 +3,13 @@ use crate::common::ObjectType;
 
 /// a subset of git, implemented as a learning challenge
 #[derive(Parser)]
-pub struct Cli {
+pub(crate) struct Cli {
     #[command(subcommand)]
     pub command: Command,
 }
 
 #[derive(Subcommand)]
-pub enum Command {
+pub(crate) enum Command {
     /// Create an empty Git repository
     Init,
     /// Provide content for repository objects
@@ -67,7 +67,7 @@ pub enum Command {
 
 #[derive(Args)]
 #[group(required = true, multiple = false)]
-pub struct CatFlags {
+pub(crate) struct CatFlags {
     /// pretty-print <object> content
     #[arg(short = 'p')]
     pub print_content: bool,

@@ -2,29 +2,30 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use clap::ValueEnum;
 use anyhow::Context;
 
-pub const GIT_PATH: &'static str = ".git";
-pub const OBJECTS_PATH: &'static str = ".git/objects";
-pub const HEAD_PATH: &'static str = ".git/HEAD";
+pub(crate) const GIT_PATH: &'static str = ".git";
+pub(crate) const OBJECTS_PATH: &'static str = ".git/objects";
+pub(crate) const HEAD_PATH: &'static str = ".git/HEAD";
 
-pub const TEST_REPO_PATH: &'static str = "test_data";
+#[cfg(test)]
+pub(crate) const TEST_REPO_PATH: &'static str = "test_data";
 
-pub const MAX_OBJECT_SIZE: u64 = 1 * 1024 * 1024 * 1024; // 1 GB
+pub(crate) const MAX_OBJECT_SIZE: u64 = 1 * 1024 * 1024 * 1024; // 1 GB
 
-pub const COMMIT_AUTHOR: &'static str =  "test";
-pub const COMMIT_EMAIL: &'static str =  "example@example.com";
-pub const COMMIT_TIMEZONE: &'static str =  "+0400";
+pub(crate) const COMMIT_AUTHOR: &'static str =  "test";
+pub(crate) const COMMIT_EMAIL: &'static str =  "example@example.com";
+pub(crate) const COMMIT_TIMEZONE: &'static str =  "+0400";
 
-pub const HASH_ENCODED_LEN: usize = 40;
-pub const HASH_RAW_LEN: usize = 20;
-pub const OBJECT_DIR_LEN: usize = 2;
-pub const MIN_OBJECT_SEARCH_LEN: usize = 4;
+pub(crate) const HASH_ENCODED_LEN: usize = 40;
+pub(crate) const HASH_RAW_LEN: usize = 20;
+pub(crate) const OBJECT_DIR_LEN: usize = 2;
+pub(crate) const MIN_OBJECT_SEARCH_LEN: usize = 4;
 
 #[derive(ValueEnum, Copy, Clone, Debug, PartialEq)]
-pub enum ObjectType {
+pub(crate) enum ObjectType {
     Blob,
     Tree,
     Commit,
@@ -64,14 +65,14 @@ impl TryFrom<&[u8]> for ObjectType {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct TreeItem {
+pub(crate) struct TreeItem {
     pub mode: ObjectMode,
     pub file_name: OsString,
     pub hash: String,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum ObjectMode {
+pub(crate) enum ObjectMode {
     Normal = 100644,
     Executable = 100755,
     Symlink = 120000,
@@ -115,18 +116,19 @@ impl Display for ConversionError {
 }
 impl Error for ConversionError {}
 
-pub fn get_object_path_by_hash(hash: &str) -> String {
+pub(crate) fn get_object_path_by_hash(hash: &str) -> String {
     let (dir, new_file_name) = hash.split_at(OBJECT_DIR_LEN);
     format!("{OBJECTS_PATH}/{dir}/{new_file_name}")
 }
 
-pub fn get_hash_by_object_path(file_path: &str) -> String {
+pub(crate) fn get_hash_by_object_path(file_path: &str) -> String {
     let file_path = &file_path[OBJECTS_PATH.len() + 1..];
     let (dir, name) = file_path.split_once('/').unwrap();
     format!("{dir}{name}")
 }
 
-pub fn init_test() -> anyhow::Result<()> {
+#[cfg(test)]
+pub(crate) fn init_test() -> anyhow::Result<()> {
     /*
     alternatively i could provide the base dir as a param for all functions, but this seems much simpler
     this makes it glitch when running test in multiple threads
@@ -134,21 +136,20 @@ pub fn init_test() -> anyhow::Result<()> {
     for example, i'm using one temporary file with a constant name
      */
     let current_dir = std::env::current_dir().context("failed to get current dir")?;
-    let test_dir = "test_data";
-    if current_dir.file_name().unwrap().as_encoded_bytes() != test_dir.as_bytes() {
-        std::env::set_current_dir(test_dir).context("failed to switch dir")?;
+    if current_dir.file_name().unwrap().as_encoded_bytes() != TEST_REPO_PATH.as_bytes() {
+        std::env::set_current_dir(TEST_REPO_PATH).context("failed to switch dir")?;
     }
     init_repo()?;
     Ok(())
 }
 
-pub fn init_repo() -> anyhow::Result<()> {
+pub(crate) fn init_repo() -> anyhow::Result<()> {
     fs::create_dir_all(GIT_PATH).context(format!("Failed to create {GIT_PATH} folder"))?;
     fs::create_dir_all(OBJECTS_PATH).context(format!("Failed to create {OBJECTS_PATH} folder"))?;
     fs::create_dir_all(".git/refs").context("Failed to create .git/refs folder")?;
-    let head = PathBuf::from(".git/HEAD");
+    let head = Path::new(HEAD_PATH);
     if !head.exists() {
-        fs::write(".git/HEAD", "ref: refs/heads/main\n").context("Failed to create .git/HEAD file")?;
+        fs::write(HEAD_PATH, "ref: refs/heads/main\n").context("Failed to create .git/HEAD file")?;
     }
     Ok(())
 }
