@@ -1,11 +1,10 @@
-use std::fs;
-use std::io::{BufWriter, stdout};
+use std::io::{BufWriter, stdout, Write};
 use anyhow::{bail, Context};
 use clap::{Parser};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use git_starter_rust::cli::{CatFlags, Cli, Command};
-use git_starter_rust::common::{COMMIT_AUTHOR, COMMIT_EMAIL, COMMIT_TIMEZONE, GIT_PATH, OBJECTS_PATH, ObjectType};
+use git_starter_rust::common::{COMMIT_AUTHOR, COMMIT_EMAIL, COMMIT_TIMEZONE, init_repo, ObjectType, TreeItem};
 use git_starter_rust::object_write::{hash_blob, hash_commit};
 use git_starter_rust::object_read::{*};
 use git_starter_rust::tree_object_read::TreeObjectIterator;
@@ -25,10 +24,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn init_command() -> anyhow::Result<()> {
-    fs::create_dir(GIT_PATH).context(format!("Failed to create {GIT_PATH} folder"))?;
-    fs::create_dir(OBJECTS_PATH).context(format!("Failed to create {OBJECTS_PATH} folder"))?;
-    fs::create_dir(".git/refs").context("Failed to create .git/refs folder")?;
-    fs::write(".git/HEAD", "ref: refs/heads/main\n").context("Failed to create .git/HEAD file")?;
+    init_repo()?;
     println!("Initialized git directory");
     Ok(())
 }
@@ -37,7 +33,7 @@ fn cat_file_command(object: String, flags: CatFlags, force_raw: bool) -> anyhow:
     let object = find_and_decode_object(&object)?;
 
     if flags.print_type {
-        println!("{}", object.object_type.to_str());
+        println!("{}", object.object_type);
         return Ok(());
     }
     if flags.print_size {
@@ -50,14 +46,11 @@ fn cat_file_command(object: String, flags: CatFlags, force_raw: bool) -> anyhow:
             (false, ObjectType::Tree) => {
                 let iterator = TreeObjectIterator::from_decoded_object(object).unwrap();
                 for item in iterator {
-                    let item = item?;
-                    println!(
-                        "{:0>6} {} {}\t{}",
-                        item.mode as usize,
-                        item.get_type().to_str(),
-                        item.hash,
-                        item.file_name,
-                    );
+                    let TreeItem {mode, file_name, hash} = item?;
+                    let object_type = mode.get_type();
+                    print!("{mode:0>6} {object_type} {hash}\t");
+                    stdout().write(file_name.as_encoded_bytes())?;
+                    print!("\n");
                 }
             }
             _ => {
@@ -73,10 +66,10 @@ fn cat_file_command(object: String, flags: CatFlags, force_raw: bool) -> anyhow:
 
 fn hash_object_command(file_name: String, object_type: ObjectType, write: bool) -> anyhow::Result<()> {
     if object_type != ObjectType::Blob {
-        bail!("Command is not implemented for {}", object_type.to_str());
+        bail!("Command is not implemented for {object_type}");
     }
     let path = PathBuf::from(file_name);
-    let hash = hash_blob(path, write)?;
+    let hash = hash_blob(&path, write)?;
     println!("{hash}");
 
     Ok(())
@@ -88,7 +81,7 @@ fn ls_tree_command(object: String, name_only: bool) -> anyhow::Result<()> {
         let iterator = TreeObjectIterator::from_decoded_object(object).unwrap();
         for item in iterator {
             let item = item?;
-            println!("{}", item.file_name);
+            stdout().write(item.file_name.as_encoded_bytes())?;
         }
         return Ok(());
     }
@@ -106,7 +99,10 @@ fn ls_tree_command(object: String, name_only: bool) -> anyhow::Result<()> {
 
 fn write_tree_command(dry_run: bool) -> anyhow::Result<()> {
     let path = PathBuf::from(".");
-    let hash = hash_tree(path, !dry_run)?;
+    let hash = hash_tree(&path, !dry_run)?;
+    let Some(hash) = hash else {
+        bail!("Tree is empty");
+    };
     println!("{hash}");
     Ok(())
 }
